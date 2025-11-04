@@ -7,7 +7,8 @@ from azure.ai.agents.models import AzureFunctionStorageQueue, AzureFunctionTool
 # Import AIProjectClient for project endpoint support
 try:
     from azure.ai.projects import AIProjectClient
-    from azure.identity import DefaultAzureCredential
+    from azure.identity import DefaultAzureCredential, AzureCliCredential
+    from azure.core.credentials import AccessToken
     PROJECT_CLIENT_AVAILABLE = True
 except ImportError:
     PROJECT_CLIENT_AVAILABLE = False
@@ -23,7 +24,7 @@ TARGET_CONTAINER = "agent-definitions"  # Where v2 agents will be stored
 # API Configuration
 HOST = os.getenv("AGENTS_HOST") or "eastus.api.azureml.ms"
 # Use host.docker.internal for Docker containers to access Windows host
-LOCAL_HOST = os.getenv("LOCAL_HOST") or "host.docker.internal:5001"
+LOCAL_HOST = os.getenv("LOCAL_HOST") or "host.docker.internal:5001" #"localhost:5001"#
 SUBSCRIPTION_ID = os.getenv("AGENTS_SUBSCRIPTION") or "921496dc-987f-410f-bd57-426eb2611356"
 RESOURCE_GROUP = os.getenv("AGENTS_RESOURCE_GROUP") or "agents-e2e-tests-eastus"
 RESOURCE_GROUP_V2 = os.getenv("AGENTS_RESOURCE_GROUP_V2") or "agents-e2e-tests-westus2"
@@ -98,6 +99,109 @@ def get_token_from_az() -> Optional[str]:
         print("Unexpected error while running az CLI:", ex)
         return None
 
+class ManualAzureCliCredential:
+    """
+    A custom credential class that uses our manual az CLI token extraction.
+    This works around issues with the azure-identity AzureCliCredential in containers.
+    """
+    def get_token(self, *scopes, **kwargs):
+        """Get an access token using az CLI."""
+        try:
+            # Try different scopes based on what's requested
+            if scopes:
+                scope = scopes[0]
+            else:
+                # Default to Azure AI scope for Azure AI Projects (confirmed correct audience)
+                scope = "https://ai.azure.com/.default"
+            
+            cmd = [
+                "az", "account", "get-access-token",
+                "--scope", scope,
+                "--query", "accessToken",
+                "-o", "tsv"
+            ]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, shell=True)
+            if proc.returncode != 0:
+                # Try without suppressing stderr to get the actual error
+                proc_debug = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                raise Exception(f"az CLI returned error: {proc_debug.stderr.strip()}")
+            
+            # Clean the token output - get only the last non-empty line (the actual token)
+            lines = [line.strip() for line in proc.stdout.strip().split('\n') if line.strip()]
+            if not lines:
+                raise Exception("az CLI returned empty token")
+            
+            # The token should be the last line that looks like a token (starts with ey)
+            token = None
+            for line in reversed(lines):
+                if line.startswith('ey') or len(line) > 50:  # JWT tokens start with 'ey' or are long strings
+                    token = line
+                    break
+            
+            if not token:
+                # Fallback to the last line if no obvious token found
+                token = lines[-1]
+            
+            # Return a proper AccessToken object
+            import time
+            # Token expires in 1 hour (3600 seconds)
+            expires_on = int(time.time()) + 3600
+            return AccessToken(token, expires_on)
+            
+        except Exception as e:
+            raise Exception(f"Failed to get token via az CLI: {e}")
+
+class StaticTokenCredential:
+    """
+    A credential class that uses a pre-provided static token.
+    Useful when we have a token from AZ_TOKEN environment variable.
+    """
+    def __init__(self, token: str):
+        self.token = token
+        
+    def get_token(self, *scopes, **kwargs):
+        """Return the static token."""
+        import time
+        # Assume token expires in 1 hour (3600 seconds)
+        expires_on = int(time.time()) + 3600
+        return AccessToken(self.token, expires_on)
+
+def get_azure_credential():
+    """
+    Get the appropriate Azure credential for the current environment.
+    Prefers static token credential when AZ_TOKEN is available.
+    """
+    if not PROJECT_CLIENT_AVAILABLE:
+        raise ImportError("azure-identity package is required for credential functionality")
+    
+    # Check if we have a static token from environment variable (highest priority)
+    static_token = os.environ.get('AZ_TOKEN')
+    if static_token:
+        print("🔑 Using static token from AZ_TOKEN environment variable")
+        return StaticTokenCredential(static_token)
+    
+    # Check if we're likely in a container environment
+    is_container = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+    
+    if is_container:
+        # In container, use DefaultAzureCredential which has better fallback handling for version mismatches
+        try:
+            print("🐳 Container environment detected, using DefaultAzureCredential for better compatibility")
+            return DefaultAzureCredential()
+        except Exception as e:
+            print(f"⚠️  DefaultAzureCredential failed: {e}")
+            print("💡 Falling back to manual Azure CLI credential")
+            try:
+                return ManualAzureCliCredential()
+            except Exception as e2:
+                print(f"⚠️  Manual Azure CLI credential also failed: {e2}")
+                print("💡 This might be due to Azure CLI version mismatch between host and container")
+                raise Exception(f"All credential methods failed. Host CLI: 2.77.0, Container CLI: 2.78.0. Try: az upgrade")
+    else:
+        # On host system, use default credential chain
+        print("🖥️  Host environment detected, using default credential chain")
+        return DefaultAzureCredential()
+
 def set_api_token() -> bool:
     """
     Ensure we have a valid bearer token for API calls.
@@ -127,14 +231,15 @@ def do_api_request(method: str, url: str, **kwargs) -> requests.Response:
     headers["Accept"] = "application/json"
     kwargs["headers"] = headers
 
-    # Set longer timeout for localhost development (servers may be slower)
-    if "localhost" in url:
+    # Set longer timeout for localhost/local development (servers may be slower)
+    if "localhost" in url or "host.docker.internal" in url:
         kwargs["timeout"] = 120  # 2 minutes for local development
         kwargs["verify"] = False
-        # Suppress the SSL warning for localhost
+        # Suppress the SSL warning for localhost/local development
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        print(f"🏠 Making request to localhost with extended timeout: {url}")
+        host_type = "localhost" if "localhost" in url else "host.docker.internal (Docker)"
+        print(f"🏠 Making request to {host_type} with extended timeout and no SSL verification: {url}")
     elif "timeout" not in kwargs:
         kwargs["timeout"] = 30
 
@@ -228,7 +333,7 @@ def get_assistant_from_project_connection(project_connection_string: str, assist
     # Try to use from_connection_string method (available in beta versions)
     try:
         project_client = AIProjectClient.from_connection_string(
-            credential=DefaultAzureCredential(),
+            credential=get_azure_credential(),
             conn_str=project_connection_string
         )
         print("✅ Using AIProjectClient.from_connection_string method")
@@ -253,7 +358,7 @@ def list_assistants_from_project_connection(project_connection_string: str) -> L
     # Try to use from_connection_string method (available in beta versions)
     try:
         project_client = AIProjectClient.from_connection_string(
-            credential=DefaultAzureCredential(),
+            credential=get_azure_credential(),
             conn_str=project_connection_string
         )
         print("✅ Using AIProjectClient.from_connection_string method")
@@ -275,95 +380,182 @@ def list_assistants_from_project_connection(project_connection_string: str) -> L
         return agent_list
 
 def get_assistant_from_project(project_endpoint: str, assistant_id: str, subscription_id: Optional[str] = None, resource_group_name: Optional[str] = None, project_name: Optional[str] = None) -> Dict[str, Any]:
-    """Get v1 assistant details from AIProjectClient using endpoint."""
-    if not PROJECT_CLIENT_AVAILABLE:
-        raise ImportError("azure-ai-projects package is required for project endpoint functionality")
+    """Get v1 assistant details from project endpoint using direct API calls (bypassing AIProjectClient SDK bug)."""
     
-    # Extract project information from endpoint if not provided
-    if not subscription_id or not resource_group_name or not project_name:
-        print(f"   🔍 Some project parameters missing, attempting to extract from endpoint or environment...")
-        
-        # Use environment variables as fallbacks
-        subscription_id = subscription_id or os.getenv("AGENTS_SUBSCRIPTION") or "921496dc-987f-410f-bd57-426eb2611356"
-        resource_group_name = resource_group_name or os.getenv("AGENTS_RESOURCE_GROUP") or "agents-e2e-tests-eastus"
-        
-        # Try to extract project name from endpoint URL
-        if not project_name:
-            import re
-            project_match = re.search(r'/projects/([^/?]+)', project_endpoint)
-            if project_match:
-                project_name = project_match.group(1)
-                print(f"   📝 Extracted project name from endpoint: {project_name}")
-            else:
-                project_name = "default-project"
-                print(f"   ⚠️  Could not extract project name from endpoint, using default: {project_name}")
-        
-        print(f"   📋 Using: subscription={subscription_id[:8]}..., resource_group={resource_group_name}, project={project_name}")
+    # Since direct API calls work and AIProjectClient has issues, use direct REST API
+    print(f"   🌐 Using direct API call to project endpoint (bypassing AIProjectClient SDK)")
     
-    # Initialize AIProjectClient with all required parameters
+    # Build the direct API URL
+    if not project_endpoint.endswith('/'):
+        project_endpoint = project_endpoint + '/'
+    
+    # Remove trailing slash if present, then add the assistants path
+    api_url = project_endpoint.rstrip('/') + f'/assistants/{assistant_id}'
+    
+    # Add API version parameter
+    params = {"api-version": API_VERSION}
+    
+    print(f"   📞 Making direct API call to: {api_url}")
+    print(f"   🔧 Using API version: {API_VERSION}")
+    
     try:
-        project_client = AIProjectClient(
-            endpoint=project_endpoint,
-            credential=DefaultAzureCredential(),
-            subscription_id=subscription_id,
-            resource_group_name=resource_group_name,
-            project_name=project_name
-        )
+        # Make the direct API request
+        response = do_api_request("GET", api_url, params=params)
+        result = response.json()
+        
+        print(f"   ✅ Successfully retrieved assistant via direct API call")
+        print(f"   📋 Assistant ID: {result.get('id', 'N/A')}")
+        print(f"   📋 Assistant Name: {result.get('name', 'N/A')}")
+        
+        return result
+        
     except Exception as e:
-        raise RuntimeError(f"Could not initialize AIProjectClient. Error: {e}. Please ensure you have the correct azure-ai-projects version and valid parameters.")
-    
-    with project_client:
-        agent = project_client.agents.get_agent(assistant_id)
-        # Convert the agent object to dictionary format with proper JSON serialization
-        if hasattr(agent, 'model_dump'):
-            return json.loads(json.dumps(agent.model_dump(), default=str))
+        print(f"   ❌ Direct API call failed: {e}")
+        
+        # Fallback to AIProjectClient if available (for debugging)
+        if PROJECT_CLIENT_AVAILABLE:
+            print(f"   🔄 Attempting fallback to AIProjectClient...")
+            
+            # Extract project information from endpoint if not provided
+            if not subscription_id or not resource_group_name or not project_name:
+                print(f"   🔍 Some project parameters missing, attempting to extract from endpoint or environment...")
+                
+                # Use environment variables as fallbacks
+                subscription_id = subscription_id or os.getenv("AGENTS_SUBSCRIPTION") or "921496dc-987f-410f-bd57-426eb2611356"
+                resource_group_name = resource_group_name or os.getenv("AGENTS_RESOURCE_GROUP") or "agents-e2e-tests-eastus"
+                
+                # Try to extract project name from endpoint URL
+                if not project_name:
+                    import re
+                    project_match = re.search(r'/projects/([^/?]+)', project_endpoint)
+                    if project_match:
+                        project_name = project_match.group(1)
+                        print(f"   📝 Extracted project name from endpoint: {project_name}")
+                    else:
+                        project_name = "default-project"
+                        print(f"   ⚠️  Could not extract project name from endpoint, using default: {project_name}")
+                
+                print(f"   📋 Using: subscription={subscription_id[:8]}..., resource_group={resource_group_name}, project={project_name}")
+            
+            # Initialize AIProjectClient with all required parameters
+            try:
+                project_client = AIProjectClient(
+                    endpoint=project_endpoint,
+                    credential=get_azure_credential(),
+                    subscription_id=subscription_id,
+                    resource_group_name=resource_group_name,
+                    project_name=project_name
+                )
+                
+                with project_client:
+                    agent = project_client.agents.get_agent(assistant_id)
+                    # Convert the agent object to dictionary format with proper JSON serialization
+                    if hasattr(agent, 'model_dump'):
+                        return json.loads(json.dumps(agent.model_dump(), default=str))
+                    else:
+                        return json.loads(json.dumps(dict(agent), default=str))
+                        
+            except Exception as client_error:
+                print(f"   ❌ AIProjectClient fallback also failed: {client_error}")
+                raise RuntimeError(f"Both direct API call and AIProjectClient failed. Direct API error: {e}, AIProjectClient error: {client_error}")
         else:
-            return json.loads(json.dumps(dict(agent), default=str))
+            raise
 
 def list_assistants_from_project(project_endpoint: str, subscription_id: Optional[str] = None, resource_group_name: Optional[str] = None, project_name: Optional[str] = None) -> List[Dict[str, Any]]:
-    """List all v1 assistants from AIProjectClient."""
-    if not PROJECT_CLIENT_AVAILABLE:
-        raise ImportError("azure-ai-projects package is required for project endpoint functionality")
+    """List all v1 assistants from project endpoint using direct API calls (bypassing AIProjectClient SDK bug)."""
     
-    # Try different AIProjectClient constructor patterns for different versions
+    # Since direct API calls work and AIProjectClient has issues, use direct REST API
+    print(f"   🌐 Using direct API call to project endpoint (bypassing AIProjectClient SDK)")
+    
+    # Build the direct API URL
+    if not project_endpoint.endswith('/'):
+        project_endpoint = project_endpoint + '/'
+    
+    # Remove trailing slash if present, then add the assistants path
+    api_url = project_endpoint.rstrip('/') + '/assistants'
+    
+    # Add API version parameter
+    params = {"api-version": API_VERSION, "limit": "100"}
+    
+    print(f"   📞 Making direct API call to: {api_url}")
+    print(f"   🔧 Using API version: {API_VERSION}")
+    
     try:
-        # Try the newer constructor with additional parameters (if provided)
-        if subscription_id and resource_group_name and project_name:
-            project_client = AIProjectClient(
-                endpoint=project_endpoint,
-                credential=DefaultAzureCredential(),
-                subscription_id=subscription_id,
-                resource_group_name=resource_group_name,
-                project_name=project_name
-            )
-        else:
-            # Fallback to the original constructor (should work with most versions)
-            project_client = AIProjectClient(
-                endpoint=project_endpoint,
-                credential=DefaultAzureCredential(),
-            )
-    except TypeError as e:
-        # If that fails, try with just endpoint and credential
-        print(f"   ⚠️  Trying alternative AIProjectClient constructor due to: {e}")
-        try:
-            project_client = AIProjectClient(
-                endpoint=project_endpoint,
-                credential=DefaultAzureCredential(),
-            )
-        except Exception as fallback_error:
-            raise RuntimeError(f"Could not initialize AIProjectClient with any constructor pattern. Original error: {e}, Fallback error: {fallback_error}")
-    
-    with project_client:
-        agents = project_client.agents.list_agents()
-        # Convert agent objects to dictionary format with proper JSON serialization
-        agent_list = []
-        for agent in agents:
-            if hasattr(agent, 'model_dump'):
-                agent_dict = json.loads(json.dumps(agent.model_dump(), default=str))
+        # Make the direct API request
+        response = do_api_request("GET", api_url, params=params)
+        result = response.json()
+        
+        # Handle different response formats (same logic as list_assistants_from_api)
+        if isinstance(result, dict):
+            if "data" in result:
+                agent_list = result["data"]
+            elif "assistants" in result:
+                agent_list = result["assistants"]
+            elif "items" in result:
+                agent_list = result["items"]
             else:
-                agent_dict = json.loads(json.dumps(dict(agent), default=str))
-            agent_list.append(agent_dict)
+                # If we can't find a list, return empty
+                print(f"   ⚠️  Unexpected API response format: {type(result)}")
+                agent_list = []
+        elif isinstance(result, list):
+            agent_list = result
+        else:
+            # If we can't find a list, return empty
+            print(f"   ⚠️  Unexpected API response format: {type(result)}")
+            agent_list = []
+        
+        print(f"   ✅ Successfully retrieved {len(agent_list)} assistants via direct API call")
+        
         return agent_list
+        
+    except Exception as e:
+        print(f"   ❌ Direct API call failed: {e}")
+        
+        # Fallback to AIProjectClient if available (for debugging)
+        if PROJECT_CLIENT_AVAILABLE:
+            print(f"   🔄 Attempting fallback to AIProjectClient...")
+            
+            # Try different AIProjectClient constructor patterns for different versions
+            try:
+                # Try the newer constructor with additional parameters (if provided)
+                if subscription_id and resource_group_name and project_name:
+                    project_client = AIProjectClient(
+                        endpoint=project_endpoint,
+                        credential=get_azure_credential(),
+                        subscription_id=subscription_id,
+                        resource_group_name=resource_group_name,
+                        project_name=project_name
+                    )
+                else:
+                    # Fallback to the original constructor (should work with most versions)
+                    project_client = AIProjectClient(
+                        endpoint=project_endpoint,
+                        credential=get_azure_credential(),
+                    )
+            except TypeError as type_error:
+                # If that fails, try with just endpoint and credential
+                print(f"   ⚠️  Trying alternative AIProjectClient constructor due to: {type_error}")
+                try:
+                    project_client = AIProjectClient(
+                        endpoint=project_endpoint,
+                        credential=get_azure_credential(),
+                    )
+                except Exception as fallback_error:
+                    raise RuntimeError(f"Could not initialize AIProjectClient with any constructor pattern. Original error: {type_error}, Fallback error: {fallback_error}")
+            
+            with project_client:
+                agents = project_client.agents.list_agents()
+                # Convert agent objects to dictionary format with proper JSON serialization
+                agent_list = []
+                for agent in agents:
+                    if hasattr(agent, 'model_dump'):
+                        agent_dict = json.loads(json.dumps(agent.model_dump(), default=str))
+                    else:
+                        agent_dict = json.loads(json.dumps(dict(agent), default=str))
+                    agent_list.append(agent_dict)
+                return agent_list
+        else:
+            raise
 
 def create_agent_version_via_api(agent_name: str, agent_version_data: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -384,6 +576,8 @@ def create_agent_version_via_api(agent_name: str, agent_version_data: Dict[str, 
     print(f"🌐 Creating agent version via v2 API:")
     print(f"   URL: {url}")
     print(f"   Agent Name: {agent_name}")
+    print(f"   API Version: {API_VERSION}")
+    print(f"   Full params: {params}")
     
     try:
         # Make the POST request to create the agent version

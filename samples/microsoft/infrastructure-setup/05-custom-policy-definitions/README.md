@@ -2,6 +2,20 @@
 
 Azure Policy enables you to put guardrails on resource configurations and enable self-serve resource creation in your organization. This repository shows examples for common scenarios in Azure AI Foundry.
 
+## Available Policies
+
+### 1. Deny Disallowed Connections (`deny-disallowed-connections.json`)
+This policy restricts AI Foundry project connections to only allow specific categories. By default, it only allows `CognitiveSearch` connections, but this can be customized via parameters.
+
+**Policy Effect**: Deny  
+**Scope**: Microsoft.CognitiveServices/accounts/projects/connections
+
+### 2. Deny Key Authentication Connections (`deny-key-auth-connections.json`)
+This policy prevents the creation of connections that use key-based authentication methods.
+
+### 3. Audit Enabled VNet Injection (`audit-enabled-vnet-injection.json`)
+This policy audits whether VNet injection is properly enabled for AI Foundry resources.
+
 ## Deployment
 
 ### Prerequisites

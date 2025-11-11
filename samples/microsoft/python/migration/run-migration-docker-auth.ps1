@@ -42,12 +42,16 @@ try {
 
 # Parse arguments to detect production mode
 $productionTenant = $null
+$sourceTenant = $null
 $productionResource = $null
 $productionSubscription = $null
 
 for ($i = 0; $i -lt $Arguments.Length; $i++) {
     if ($Arguments[$i] -eq "--production-tenant" -and ($i + 1) -lt $Arguments.Length) {
         $productionTenant = $Arguments[$i + 1]
+    }
+    if ($Arguments[$i] -eq "--source-tenant" -and ($i + 1) -lt $Arguments.Length) {
+        $sourceTenant = $Arguments[$i + 1]
     }
     if ($Arguments[$i] -eq "--production-resource" -and ($i + 1) -lt $Arguments.Length) {
         $productionResource = $Arguments[$i + 1]
@@ -57,22 +61,50 @@ for ($i = 0; $i -lt $Arguments.Length; $i++) {
     }
 }
 
-# Generate source token (current tenant)
-Write-Host "${Blue}🔑 Generating source Azure AI token...${Reset}"
-try {
-    $sourceToken = az account get-access-token --scope https://ai.azure.com/.default --query accessToken -o tsv
-    if ($sourceToken -and $sourceToken.Length -gt 100) {
-        Write-Host "${Green}✅ Source token generated successfully (length: $($sourceToken.Length))${Reset}"
-    } else {
-        Write-Host "${Red}❌ Failed to generate source token or token is invalid${Reset}"
+# Generate source token (with tenant handling)
+if ($sourceTenant) {
+    Write-Host "${Blue}🔑 Generating source Azure AI token for tenant: $sourceTenant${Reset}"
+    try {
+        # Check current tenant
+        $currentTenant = az account show --query tenantId -o tsv 2>$null
+        
+        if ($currentTenant -ne $sourceTenant) {
+            Write-Host "${Yellow}🔄 Switching to source tenant: $sourceTenant${Reset}"
+            az login --tenant $sourceTenant --only-show-errors
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "${Red}❌ Failed to authenticate with source tenant${Reset}"
+                exit 1
+            }
+        }
+        
+        $sourceToken = az account get-access-token --scope https://ai.azure.com/.default --query accessToken -o tsv
+        if ($sourceToken -and $sourceToken.Length -gt 100) {
+            Write-Host "${Green}✅ Source token generated successfully (length: $($sourceToken.Length))${Reset}"
+        } else {
+            Write-Host "${Red}❌ Failed to generate source token or token is invalid${Reset}"
+            exit 1
+        }
+    } catch {
+        Write-Host "${Red}❌ Failed to generate source Azure token: $_${Reset}"
         exit 1
     }
-} catch {
-    Write-Host "${Red}❌ Failed to generate source Azure token: $_${Reset}"
-    exit 1
+} else {
+    Write-Host "${Blue}🔑 Generating source Azure AI token (current tenant)...${Reset}"
+    try {
+        $sourceToken = az account get-access-token --scope https://ai.azure.com/.default --query accessToken -o tsv
+        if ($sourceToken -and $sourceToken.Length -gt 100) {
+            Write-Host "${Green}✅ Source token generated successfully (length: $($sourceToken.Length))${Reset}"
+        } else {
+            Write-Host "${Red}❌ Failed to generate source token or token is invalid${Reset}"
+            exit 1
+        }
+    } catch {
+        Write-Host "${Red}❌ Failed to generate source Azure token: $_${Reset}"
+        exit 1
+    }
 }
 
-# Handle production tenant authentication if specified
+# Handle production authentication
 $productionToken = $null
 if ($productionTenant) {
     Write-Host "${Blue}🏭 Production mode detected - handling production tenant authentication${Reset}"
@@ -114,6 +146,23 @@ if ($productionTenant) {
         
     } catch {
         Write-Host "${Red}❌ Failed during production tenant authentication: $_${Reset}"
+        exit 1
+    }
+} elseif ($productionResource) {
+    Write-Host "${Blue}🏭 Production resource specified - using current tenant for production token${Reset}"
+    
+    try {
+        # Generate production token with current tenant
+        Write-Host "${Blue}🔑 Generating production Azure AI token (current tenant)...${Reset}"
+        $productionToken = az account get-access-token --scope https://ai.azure.com/.default --query accessToken -o tsv
+        if ($productionToken -and $productionToken.Length -gt 100) {
+            Write-Host "${Green}✅ Production token generated successfully (length: $($productionToken.Length))${Reset}"
+        } else {
+            Write-Host "${Red}❌ Failed to generate production token${Reset}"
+            exit 1
+        }
+    } catch {
+        Write-Host "${Red}❌ Failed to generate production token: $_${Reset}"
         exit 1
     }
 } else {
@@ -162,6 +211,17 @@ try {
         Write-Host "${Green}🏠 Passing source token to container${Reset}"
     }
     
+    # Filter out PowerShell-only arguments that shouldn't be passed to Python
+    $filteredArguments = @()
+    for ($i = 0; $i -lt $Arguments.Length; $i++) {
+        if ($Arguments[$i] -eq "--source-tenant") {
+            # Skip this argument and its value
+            $i++  # Skip the next element (the tenant ID)
+        } else {
+            $filteredArguments += $Arguments[$i]
+        }
+    }
+    
     docker run --rm -it `
         @dockerEnvVars `
         -e COSMOS_DB_CONNECTION_STRING="$env:COSMOS_DB_CONNECTION_STRING" `
@@ -183,7 +243,7 @@ try {
         -e AZURE_PROJECT_NAME="$env:AZURE_PROJECT_NAME" `
         -v "$env:USERPROFILE\.azure:/home/migration/.azure" `
         v1-to-v2-migration `
-        @Arguments
+        @filteredArguments
     
     $exitCode = $LASTEXITCODE
     

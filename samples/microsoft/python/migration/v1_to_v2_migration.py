@@ -39,9 +39,6 @@ PRODUCTION_SUBSCRIPTION = os.getenv("PRODUCTION_SUBSCRIPTION")  # e.g., "b161545
 PRODUCTION_TENANT = os.getenv("PRODUCTION_TENANT")  # e.g., "33e577a9-b1b8-4126-87c0-673f197bf624"
 PRODUCTION_TOKEN = os.getenv("PRODUCTION_TOKEN")  # Production token from PowerShell script
 
-# Token management for dual authentication
-PRODUCTION_TOKEN = None  # Will be set when production tenant authentication is needed
-
 # v1 API base URL
 BASE_V1 = f"https://{HOST}/agents/v1.0/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.MachineLearningServices/workspaces/{WORKSPACE}"
 # v2 API base URL - will be determined based on production vs local mode
@@ -657,7 +654,7 @@ def create_agent_version_via_api(agent_name: str, agent_version_data: Dict[str, 
         API response data
     """
     # Build the v2 API endpoint URL based on mode (production vs local)
-    agent_name = agent_name[:len(agent_name)-1] + "f"
+    agent_name = agent_name.lower()[:len(agent_name)-1] + "f"
     
     if production_resource and production_subscription:
         # Production mode: use Azure AI services endpoint format
@@ -682,6 +679,15 @@ def create_agent_version_via_api(agent_name: str, agent_version_data: Dict[str, 
     print(f"   API Version: {API_VERSION}")
     print(f"   Full params: {params}")
     
+    # Debug: Show the actual request body
+    print(f"🔍 Request Body Debug:")
+    print(f"   Type: {type(agent_version_data)}")
+    print(f"   Keys: {list(agent_version_data.keys()) if isinstance(agent_version_data, dict) else 'Not a dict'}")
+    if isinstance(agent_version_data, dict):
+        import json
+        print(f"   Full JSON payload:")
+        print(json.dumps(agent_version_data, indent=2, default=str)[:2000] + "..." if len(str(agent_version_data)) > 2000 else json.dumps(agent_version_data, indent=2, default=str))
+    
     try:
         # Make the POST request to create the agent version with appropriate token
         # Use production token from environment if available and production resource is specified
@@ -701,7 +707,14 @@ def create_agent_version_via_api(agent_name: str, agent_version_data: Dict[str, 
     except requests.exceptions.HTTPError as e:
         print(f"❌ Failed to create agent version via v2 API: {e}")
         if hasattr(e, 'response') and e.response:
-            print(f"❌ API Response: {e.response.text}")
+            print(f"🔍 Response Status Code: {e.response.status_code}")
+            try:
+                error_response = e.response.json()
+                print(f"🔍 Error Response JSON:")
+                import json
+                print(json.dumps(error_response, indent=2))
+            except:
+                print(f"🔍 Error Response Text: {e.response.text[:1000]}")
         raise
     except Exception as e:
         print(f"❌ Failed to create agent version via v2 API: {e}")

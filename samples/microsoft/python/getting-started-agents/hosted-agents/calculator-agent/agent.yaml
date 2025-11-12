@@ -1,22 +1,25 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/main/runtime/json-schema/ContainerAgent.yaml
-
-kind: hosted
-name: CalculatorAgentLG
+name: CalculatorAgent
 description: This LangGraph agent can perform arithmetic calculations such as addition, subtraction, multiplication, and division.
 metadata:
-    authors:
-        - migu
-    example:
-        - content: What is the size of France in square miles, divided by 27?
-          role: user
-    tags:
-        - example
-        - learning
-protocols: []
-environment_variables:
+  example:
+    - role: user
+      content: |-
+        What is the size of France in square miles, divided by 27?
+  tags:
+    - example
+    - learning
+  authors:
+    - migu
+template:
+  name: CalculatorAgentLG
+  kind: hosted
+  environment_variables:
     - name: AZURE_OPENAI_ENDPOINT
       value: ${AZURE_OPENAI_ENDPOINT}
     - name: OPENAI_API_VERSION
       value: 2025-03-01-preview
     - name: APPLICATIONINSIGHTS_CONNECTION_STRING
       value: ${APPLICATIONINSIGHTS_CONNECTION_STRING}
+resources:
+  - kind: model
+    id: gpt-4o-mini

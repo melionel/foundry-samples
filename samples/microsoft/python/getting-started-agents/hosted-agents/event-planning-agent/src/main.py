@@ -14,9 +14,7 @@ def main() -> None:
     container = AppContainer()
     container.wire(modules=[__name__])
 
-    agent = build_event_planning_workflow().as_agent("event_planning_agent")
-
-    from_agent_framework(agent).run()
+    from_agent_framework(lambda _: build_event_planning_workflow().as_agent("event_planning_agent")).run()
 
 
 if __name__ == "__main__":

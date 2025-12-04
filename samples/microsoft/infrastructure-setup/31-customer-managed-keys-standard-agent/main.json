@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.39.26.7824",
-      "templateHash": "5355284057522929069"
+      "templateHash": "9028717141391138763"
     }
   },
   "parameters": {
@@ -1194,7 +1194,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.39.26.7824",
-              "templateHash": "11286754940754531283"
+              "templateHash": "8346749807649424278"
             }
           },
           "parameters": {
@@ -1213,7 +1213,7 @@
           },
           "variables": {
             "roleDefinitionId": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('cosmosAccountName'), '00000000-0000-0000-0000-000000000002')]",
-            "accountScope": "[format('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.DocumentDB/databaseAccounts/{2}', subscription().subscriptionId, resourceGroup().name, parameters('cosmosAccountName'))]"
+            "accountScope": "[format('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.DocumentDB/databaseAccounts/{2}/dbs/enterprise_memory', subscription().subscriptionId, resourceGroup().name, parameters('cosmosAccountName'))]"
           },
           "resources": [
             {

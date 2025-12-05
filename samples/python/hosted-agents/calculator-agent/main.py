@@ -24,21 +24,6 @@ load_dotenv()
 if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
     configure_azure_monitor(enable_live_metrics=True, logger_name="__main__")
 
-deployment_name = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o-mini")
-
-try:
-    credential = DefaultAzureCredential()
-    token_provider = get_bearer_token_provider(
-        credential, "https://cognitiveservices.azure.com/.default"
-    )
-    llm = init_chat_model(
-        f"azure_openai:{deployment_name}",
-        azure_ad_token_provider=token_provider,
-    )
-except Exception:
-    logger.exception("Calculator Agent failed to start")
-    raise
-
 
 # Define tools
 @tool
@@ -77,7 +62,29 @@ def divide(a: int, b: int) -> float:
 # Augment the LLM with tools
 tools = [add, multiply, divide]
 tools_by_name = {tool.name: tool for tool in tools}
-llm_with_tools = llm.bind_tools(tools)
+_llm_with_tools = None
+
+def llm():
+    try:
+        deployment_name = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o-mini")
+        credential = DefaultAzureCredential()
+        token_provider = get_bearer_token_provider(
+            credential, "https://cognitiveservices.azure.com/.default"
+        )
+        llm = init_chat_model(
+            f"azure_openai:{deployment_name}",
+            azure_ad_token_provider=token_provider,
+        )
+        return llm
+    except Exception:
+        logger.exception("Calculator Agent failed to start")
+        raise
+
+def llm_with_tools():
+    global _llm_with_tools
+    if _llm_with_tools is None:
+        _llm_with_tools = llm().bind_tools(tools)
+    return _llm_with_tools
 
 # Nodes
 def llm_call(state: MessagesState):
@@ -85,7 +92,7 @@ def llm_call(state: MessagesState):
 
     return {
         "messages": [
-            llm_with_tools.invoke(
+            llm_with_tools().invoke(
                 [
                     SystemMessage(
                         content="You are a helpful assistant tasked with performing arithmetic on a set of inputs."

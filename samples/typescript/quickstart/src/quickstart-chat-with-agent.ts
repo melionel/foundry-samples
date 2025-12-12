@@ -1,0 +1,34 @@
+import { DefaultAzureCredential } from "@azure/identity";
+import { AIProjectClient } from "@azure/ai-projects";
+
+const projectEndpoint: string = process.env["AZURE_AI_PROJECT_ENDPOINT"] || "<project endpoint>";
+const agentName: string = process.env["AZURE_AI_FOUNDRY_AGENT_NAME"] || "<agent name>";
+
+async function main(): Promise<void> {
+  // Create AI Project client
+  const project = new AIProjectClient(projectEndpoint, new DefaultAzureCredential());
+  const openAIClient = await project.getOpenAIClient();
+
+  // Create conversation with initial user message
+  console.log("\nCreating conversation with initial user message...");
+  const conversation = await openAIClient.conversations.create({
+    items: [
+      { type: "message", role: "user", content: "What is the size of France in square miles?" },
+    ],
+  });
+  console.log(`Created conversation with initial user message (id: ${conversation.id})`);
+
+  // Generate response using the agent
+  console.log("\nGenerating response...");
+  const response = await openAIClient.responses.create(
+    {
+      conversation: conversation.id,
+    },
+    {
+      body: { agent: { name: agentName, type: "agent_reference" } },
+    },
+  );
+  console.log(`Response output: ${response.output_text}`);
+}
+
+main().catch(console.error);

@@ -7,12 +7,12 @@ const deploymentName = process.env["MODEL_DEPLOYMENT_NAME"] || "<model deploymen
 
 async function main(): Promise<void> {
     const project = new AIProjectClient(projectEndpoint, new DefaultAzureCredential());
-    const agent = await project.agents.createVersion("my-agent-basic", {
-        kind: "prompt",
+    const openAIClient = await project.getOpenAIClient();
+    const response = await openAIClient.responses.create({
         model: deploymentName,
-        instructions: "You are a helpful assistant that answers general questions",
-  });
-  console.log(`Agent created (id: ${agent.id}, name: ${agent.name}, version: ${agent.version})`);
+        input: "What is the size of France in square miles?",
+    });
+    console.log(`Response output: ${response.output_text}`);
 }
 
 main().catch(console.error);

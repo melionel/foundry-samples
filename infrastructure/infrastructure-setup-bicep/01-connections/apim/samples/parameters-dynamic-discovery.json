@@ -3,16 +3,16 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "projectResourceId": {
-      "value": "/subscriptions/12345678-1234-1234-1234-123456789abc/resourceGroups/rg-sample/providers/Microsoft.CognitiveServices/accounts/sample-foundry-account/projects/sample-project"
+      "value": "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/YOUR-RG/providers/Microsoft.CognitiveServices/accounts/YOUR-AI-FOUNDRY-ACCOUNT/projects/YOUR-PROJECT"
     },
-    "targetUrl": {
-      "value": "https://your-model-gateway.example.com"
+    "apimResourceId": {
+      "value": "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/YOUR-APIM-RG/providers/Microsoft.ApiManagement/service/YOUR-APIM-SERVICE"
     },
-    "gatewayName": {
-      "value": "example-gateway"
+    "apiName": {
+      "value": "YOUR-API-NAME"
     },
     "connectionName": {
-      "value": "my-modelgateway-comprehensive-connection"
+      "value": "YOUR-CONNECTION-NAME"
     },
     "authType": {
       "value": "ApiKey"
@@ -21,10 +21,10 @@
       "value": false
     },
     "deploymentInPath": {
-      "value": "false"
+      "value": "true"
     },
     "inferenceAPIVersion": {
-      "value": ""
+      "value": "2025-03-01-preview"
     },
     "deploymentAPIVersion": {
       "value": ""
@@ -37,13 +37,6 @@
     },
     "deploymentProvider": {
       "value": "AzureOpenAI"
-    },
-    "customHeaders": {
-      "value": {
-        "X-Environment": "production",
-        "X-Route-Policy": "premium",
-        "X-Client-App": "foundry-agents"
-      }
     }
   }
 }

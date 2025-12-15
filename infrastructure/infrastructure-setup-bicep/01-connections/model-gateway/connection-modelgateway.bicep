@@ -1,19 +1,21 @@
 /*
 Connections enable your AI applications to access tools and objects managed elsewhere in or outside of Azure.
 
-This template demonstrates how to add a ModelGateway connection with OAuth2 authentication
-with support for ALL ModelGateway metadata parameters. It includes only non-empty parameters in the final configuration.
+This comprehensive template demonstrates how to add a ModelGateway connection
+with support for ALL ModelGateway metadata parameters and BOTH authentication types. It includes only non-empty parameters in the final configuration.
 
-This template can handle all ModelGateway OAuth2 connection scenarios from the documentation:
-1. Basic ModelGateway OAuth2 with defaults (deploymentInPath + inferenceAPIVersion only)
-2. ModelGateway OAuth2 with Deployment API Version (adds deploymentAPIVersion)
-3. ModelGateway OAuth2 with Dynamic Discovery (adds modelDiscovery configuration)
-4. ModelGateway OAuth2 with Static Model List (adds models array)
-5. ModelGateway OAuth2 with Custom Headers (adds customHeaders)
-6. Any combination of the above
+This template can handle all ModelGateway connection scenarios from the documentation:
+1. Basic ModelGateway with defaults (deploymentInPath + inferenceAPIVersion only)
+2. ModelGateway with Deployment API Version (adds deploymentAPIVersion)
+3. ModelGateway with Dynamic Discovery (adds modelDiscovery configuration)
+4. ModelGateway with Static Model List (adds models array)
+5. ModelGateway with Custom Headers (adds customHeaders)
+6. ModelGateway with Custom Auth Config (adds authConfig)
+7. ModelGateway with OAuth2 authentication (clientId, clientSecret, tokenUrl, scopes)
+8. Any combination of the above
 
 The template uses conditional logic to include only non-empty parameters,
-making it flexible for any ModelGateway OAuth2 scenario while avoiding empty metadata.
+making it flexible for any ModelGateway scenario while avoiding empty metadata.
 
 IMPORTANT: Make sure you are logged into the subscription where the AI Foundry resource exists before deploying.
 The connection will be created in the AI Foundry project, so you need to be in that subscription context.
@@ -27,16 +29,20 @@ param gatewayName string = 'example-gateway'
 // Connection naming - can be overridden via parameter
 param connectionName string = ''  // Optional: specify custom connection name
 
-// Connection configuration (OAuth2 authentication)
-param authType string = 'OAuth2'
+// Connection configuration (ModelGateway supports both ApiKey and OAuth2)
+@allowed(['ApiKey', 'OAuth2'])
+param authType string = 'ApiKey'
 param isSharedToAll bool = false
 
-// OAuth2 credentials for the ModelGateway endpoint
+// API key for the ModelGateway endpoint (required for ApiKey auth)
 @secure()
-param clientId string
+param apiKey string = ''
+
+// OAuth2 credentials (required for OAuth2 auth)
+param clientId string = ''
 @secure()
-param clientSecret string
-param tokenUrl string
+param clientSecret string = ''
+param tokenUrl string = ''
 param scopes array = []
 
 // 1. REQUIRED - Basic ModelGateway Configuration
@@ -57,8 +63,11 @@ param staticModels array = []            // Optional: Predefined list of availab
 // 5. OPTIONAL - Custom Headers
 param customHeaders object = {}          // Optional: Custom HTTP headers as key-value pairs
 
+// 6. OPTIONAL - Custom Authentication Configuration
+param authConfig object = {}
+
 // Generate connection name if not provided
-var generatedConnectionName = 'modelgateway-${gatewayName}-oauth2'
+var generatedConnectionName = 'modelgateway-${gatewayName}-comprehensive'
 var finalConnectionName = connectionName != '' ? connectionName : generatedConnectionName
 
 // ========================================
@@ -70,10 +79,15 @@ var finalConnectionName = connectionName != '' ? connectionName : generatedConne
 var hasModelDiscovery = listModelsEndpoint != '' && getModelEndpoint != '' && deploymentProvider != ''
 var hasStaticModels = length(staticModels) > 0
 var hasCustomHeaders = !empty(customHeaders)
+var hasAuthConfig = !empty(authConfig)
 
 // Validation: Fail deployment if both static models and dynamic discovery are configured
 var bothConfiguredError = hasModelDiscovery && hasStaticModels
 var validationMessage = bothConfiguredError ? 'ERROR: Cannot configure both static models and dynamic discovery. Use either staticModels array OR modelDiscovery parameters, not both.' : ''
+
+// Validation: Fail deployment if neither static models nor dynamic discovery is configured
+var neitherConfiguredError = !hasModelDiscovery && !hasStaticModels
+var neitherConfiguredMessage = 'ERROR: Must configure either static models (staticModels array) OR dynamic discovery (listModelsEndpoint, getModelEndpoint, deploymentProvider). Cannot have neither.'
 
 // Force deployment failure if both are configured
 resource deploymentValidation 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (bothConfiguredError) {
@@ -84,6 +98,36 @@ resource deploymentValidation 'Microsoft.Resources/deploymentScripts@2023-08-01'
     retentionInterval: 'PT1H'
     azPowerShellVersion: '8.0'
     scriptContent: 'throw "${validationMessage}"'
+  }
+}
+
+// Force deployment failure if neither are configured
+resource configValidation 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (neitherConfiguredError) {
+  name: 'config-validation-error'
+  location: resourceGroup().location
+  kind: 'AzurePowerShell'
+  properties: {
+    retentionInterval: 'PT1H'
+    azPowerShellVersion: '8.0'
+    scriptContent: 'throw "${neitherConfiguredMessage}"'
+  }
+}
+
+// Validation: Check required parameters for the selected auth type
+var isApiKeyMissing = authType == 'ApiKey' && empty(apiKey)
+var isOAuth2Missing = authType == 'OAuth2' && (empty(clientId) || empty(clientSecret) || empty(tokenUrl))
+var authValidationError = isApiKeyMissing || isOAuth2Missing
+var authValidationMessage = isApiKeyMissing ? 'ERROR: apiKey is required when authType is ApiKey.' : (isOAuth2Missing ? 'ERROR: clientId, clientSecret, and tokenUrl are required when authType is OAuth2.' : '')
+
+// Force deployment failure if auth validation fails
+resource authValidation 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (authValidationError) {
+  name: 'auth-validation-error'
+  location: resourceGroup().location
+  kind: 'AzurePowerShell'
+  properties: {
+    retentionInterval: 'PT1H'
+    azPowerShellVersion: '8.0'
+    scriptContent: 'throw "${authValidationMessage}"'
   }
 }
 
@@ -113,18 +157,23 @@ var metadata = union(
   // Conditionally include custom headers
   hasCustomHeaders ? {
     customHeaders: string(customHeaders)
+  } : {},
+  // Conditionally include custom auth configuration
+  hasAuthConfig ? {
+    authConfig: string(authConfig)
   } : {}
 )
 
-// Deploy the ModelGateway OAuth2 connection using the common module
-module modelGatewayConnection 'modules/modelgateway-connection-common.bicep' = {
-  name: 'modelgateway-oauth2-connection-deployment'
+// Deploy the ModelGateway connection using the common module
+module modelGatewayConnection 'modules/modelgateway-connection-common.bicep' = if (!bothConfiguredError && !neitherConfiguredError && !authValidationError) {
+  name: 'modelgateway-connection-deployment'
   params: {
     projectResourceId: projectResourceId
-    connectionName: finalConnectionName
     targetUrl: targetUrl
+    connectionName: finalConnectionName
     authType: authType
     isSharedToAll: isSharedToAll
+    apiKey: apiKey
     clientId: clientId
     clientSecret: clientSecret
     tokenUrl: tokenUrl

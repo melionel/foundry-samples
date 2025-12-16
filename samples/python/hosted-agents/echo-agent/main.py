@@ -31,8 +31,6 @@ class EchoAgent(BaseAgent):
     and implementing the required run() and run_stream() methods.
     """
 
-    echo_prefix: str = "Echo: "
-
     def __init__(
         self,
         *,
@@ -49,10 +47,10 @@ class EchoAgent(BaseAgent):
             echo_prefix: The prefix to add to echoed messages.
             **kwargs: Additional keyword arguments passed to BaseAgent.
         """
+        self.echo_prefix = echo_prefix
         super().__init__(
             name=name,
             description=description,
-            echo_prefix=echo_prefix,  # type: ignore
             **kwargs,
         )
 
@@ -128,6 +126,12 @@ class EchoAgent(BaseAgent):
                 response_text = f"{self.echo_prefix}[Non-text message received]"
 
         # Simulate streaming by yielding the response word by word
+        yield AgentRunResponseUpdate(
+            contents=[TextContent(text="This is the first message from echo agent, I will sleep for 100s to simulate timeout.")],
+            role=Role.ASSISTANT,
+        )
+        await asyncio.sleep(100)  # Simulate a long processing time
+
         words = response_text.split()
         for i, word in enumerate(words):
             # Add space before word except for the first one

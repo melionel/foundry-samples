@@ -6,12 +6,12 @@ using OpenAI.Responses;
 
 #pragma warning disable OPENAI001
 
-string AZURE_AI_FOUNDRY_PROJECT_ENDPOINT = Environment.GetEnvironmentVariable("AZURE_AI_FOUNDRY_PROJECT_ENDPOINT")
-    ?? throw new InvalidOperationException("Missing environment variable 'AZURE_AI_FOUNDRY_PROJECT_ENDPOINT'");
-string MODEL_DEPLOYMENT_NAME = Environment.GetEnvironmentVariable("AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME")
-    ?? throw new InvalidOperationException("Missing environment variable 'AZURE_AI_FOUNDRY_MODEL_DEPLOYMENT_NAME'");
-string AGENT_NAME = Environment.GetEnvironmentVariable("AZURE_AI_FOUNDRY_AGENT_NAME")
-    ?? throw new InvalidOperationException("Missing environment variable 'AZURE_AI_FOUNDRY_AGENT_NAME'");
+string PROJECT_ENDPOINT = Environment.GetEnvironmentVariable("PROJECT_ENDPOINT")
+    ?? throw new InvalidOperationException("Missing environment variable 'PROJECT_ENDPOINT'");
+string MODEL_DEPLOYMENT_NAME = Environment.GetEnvironmentVariable("MODEL_DEPLOYMENT_NAME")
+    ?? throw new InvalidOperationException("Missing environment variable 'MODEL_DEPLOYMENT_NAME'");
+string AGENT_NAME = Environment.GetEnvironmentVariable("AGENT_NAME")
+    ?? throw new InvalidOperationException("Missing environment variable 'AGENT_NAME'");
 
 AIProjectClient projectClient = new(new Uri(AZURE_AI_FOUNDRY_PROJECT_ENDPOINT), new AzureCliCredential());
 AgentClient agentClient = projectClient.GetAgentClient();

@@ -79,7 +79,7 @@ To run the agent, execute the following command in your terminal:
 python main.py
 ```
 
-This will start the hosted agent locally on `http://localhost:8080/`.
+This will start the hosted agent locally on `http://localhost:8088/`.
 
 ### Interacting with the Agent
 

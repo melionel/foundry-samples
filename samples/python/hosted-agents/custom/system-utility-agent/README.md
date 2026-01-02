@@ -112,7 +112,7 @@ This will start the hosted agent locally and expose an OpenAI Responses-compatib
 ### Interacting with the Agent
 
 ```powershell
-curl -sS -H "Content-Type: application/json" -X POST http://localhost:8088/responses -d '{"input": "What environment am you running in? Summarize what you can observe","stream":false}'
+curl -sS -H "Content-Type: application/json" -X POST http://localhost:8088/responses -d '{"input": "What environment are you running in? Summarize what you can observe","stream":false}'
 ```
 
 ### Deploying the Agent to Microsoft Foundry

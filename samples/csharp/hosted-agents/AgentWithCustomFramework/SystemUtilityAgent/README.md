@@ -127,6 +127,10 @@ To deploy your agent to Microsoft Foundry, follow the comprehensive deployment g
 
 ## Troubleshooting
 
+### After deployed, the agent appears stateless (chat history is not preserved)
+
+This agent will remain stateless before Azure.AI.Projects supports conversation client.
+
 ### Images built on Apple Silicon or other ARM64 machines do not work on our service
 
 We **recommend using `azd` cloud build**, which always builds images with the correct architecture.
@@ -135,10 +139,10 @@ If you choose to **build locally**, and your machine is **not `linux/amd64`** (f
 
 **Fix for local builds**
 
-Add this line at the top of your `Dockerfile`:
+Use this command to build the image locally:
 
-```dockerfile
-FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:8.0
+```shell
+docker build --platform=linux/amd64 -t image .
 ```
 
 This forces the image to be built for the required `amd64` architecture.

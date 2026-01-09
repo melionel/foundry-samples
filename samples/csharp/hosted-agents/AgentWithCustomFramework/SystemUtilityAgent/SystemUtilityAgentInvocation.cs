@@ -17,6 +17,49 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
 {
     private static readonly ActivitySource ActivitySource = new("SystemUtilityAgent");
 
+    private static readonly object ApiClientLock = new();
+    private static Azure.AI.OpenAI.AzureOpenAIClient? ApiClient;
+
+    private static Azure.AI.OpenAI.AzureOpenAIClient GetOrCreateApiClient()
+    {
+        if (ApiClient is not null)
+        {
+            return ApiClient;
+        }
+
+        lock (ApiClientLock)
+        {
+            if (ApiClient is not null)
+            {
+                return ApiClient;
+            }
+
+            var aiProjectEndpoint = Environment.GetEnvironmentVariable("AZURE_AI_PROJECT_ENDPOINT");
+
+            if (string.IsNullOrWhiteSpace(aiProjectEndpoint))
+            {
+                throw new InvalidOperationException("Missing required environment variable 'AZURE_AI_PROJECT_ENDPOINT'.");
+            }
+
+            var aoaiEndpoint = ToAzureOpenAIEndpoint(aiProjectEndpoint);
+            var apiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY");
+
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                var credential = new System.ClientModel.ApiKeyCredential(apiKey);
+                ApiClient = new Azure.AI.OpenAI.AzureOpenAIClient(new Uri(aoaiEndpoint), credential);
+            }
+            else
+            {
+                var credential = new DefaultAzureCredential();
+                ApiClient = new Azure.AI.OpenAI.AzureOpenAIClient(new Uri(aoaiEndpoint), credential);
+            }
+
+            return ApiClient;
+        }
+    }
+
+
     private const string SystemPrompt =
         "You are a System Utility Agent.\n" +
         "You can inspect the runtime environment using tools (processes, ports, resources, DNS, environment variables).\n" +
@@ -46,7 +89,7 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
         var inputText = GetInputText(request);
         activity?.SetTag("gen_ai.conversation.id", context.ConversationId);
 
-        var responseText = await RunAgentLoopAsync(inputText, cancellationToken).ConfigureAwait(false);
+        var responseText = await RunAgentLoopAsync(inputText, context.ConversationId, cancellationToken).ConfigureAwait(false);
 
         IList<ItemContent> contents =
                 [new ItemContentOutputText(text: responseText, annotations: [])];
@@ -70,6 +113,7 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
         var activity = Activity.Current;
         activity?.SetTag("gen_ai.conversation.id", context.ConversationId);
 
+
         var seq = -1;
 
         yield return new ResponseCreatedEvent(++seq,
@@ -90,7 +134,7 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
 
         var inputText = GetInputText(request);
 
-        var responseText = await RunAgentLoopAsync(inputText, cancellationToken).ConfigureAwait(false);
+        var responseText = await RunAgentLoopAsync(inputText, context.ConversationId, cancellationToken).ConfigureAwait(false);
 
         foreach (var part in responseText.Split(" "))
         {
@@ -111,16 +155,32 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
             ToResponse(request, context, status: ResponseStatus.Completed, output: [item]));
     }
 
-    private static async Task<string> RunAgentLoopAsync(string userInput, CancellationToken cancellationToken)
+    private static async Task<string> RunAgentLoopAsync(string userInput, string conversationId, CancellationToken cancellationToken)
     {
         var maxTurns = GetIntEnv("AGENT_MAX_TURNS", 10);
 
-        // Build initial conversation in OpenAI Responses input format.
-        var conversation = new List<OpenAI.Responses.ResponseItem>
+        // Build initial inputs in OpenAI Responses input format.
+        var inputs = new List<OpenAI.Responses.ResponseItem>
         {
             OpenAI.Responses.ResponseItem.CreateSystemMessageItem(SystemPrompt),
             OpenAI.Responses.ResponseItem.CreateUserMessageItem(userInput)
         };
+
+        // This check conversation existence will always return false, before Azure.AI.Projects supports conversation client.
+        var conversationExists = false;
+        if (!string.IsNullOrWhiteSpace(conversationId))
+        {
+            var conversationClient = GetOrCreateApiClient().GetConversationClient();
+            try
+            {
+                var conversation = await conversationClient.GetConversationAsync(conversationId);
+                conversationExists = conversation is not null;
+            }
+            catch (Exception ex)
+            {
+                conversationExists = false;
+            }
+        }
 
         var totalInputTokens = 0;
         var totalOutputTokens = 0;
@@ -130,7 +190,7 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
 
             iter?.SetTag("current_iteration", turn);
 
-            var response = await CallAzureOpenAIResponsesAsync(conversation, cancellationToken).ConfigureAwait(false);
+            var response = await CallAzureOpenAIResponsesAsync(inputs, conversationExists ? conversationId : null, cancellationToken).ConfigureAwait(false);
 
             var usage = response.Usage;
             if (usage is not null)
@@ -145,7 +205,7 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
             var assistantTextChunks = new List<string>();
             foreach (var outputItem in response.OutputItems)
             {
-                conversation.Add(outputItem);
+                inputs.Add(outputItem);
                 if (outputItem is OpenAI.Responses.FunctionCallResponseItem)
                 {
                     using var functionCalActivity = ActivitySource.StartActivity("SystemUtilityAgent.tool_call_execution", ActivityKind.Internal);
@@ -154,7 +214,7 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
                     var arguments = ParseArguments(functionResponse.FunctionArguments);
                     var functionResult = InvokeTool(functionName, arguments, cancellationToken);
                     calledAny = true;
-                    conversation.Add(OpenAI.Responses.ResponseItem.CreateFunctionCallOutputItem(
+                    inputs.Add(OpenAI.Responses.ResponseItem.CreateFunctionCallOutputItem(
                         functionResponse.CallId,
                         JsonSerializer.Serialize(functionResult, JsonOptions)));
                     functionCalActivity?.SetTag("gen_ai.tool.name", functionName);
@@ -169,6 +229,11 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
                     {
                         assistantTextChunks.Add(c.Text);
                     }
+                }
+
+                if (conversationExists)
+                {
+                    inputs.Clear();
                 }
             }
             if (!calledAny)
@@ -187,38 +252,30 @@ public sealed class SystemUtilityAgentInvocation : IAgentInvocation
     }
 
     private static async Task<OpenAI.Responses.ResponseResult> CallAzureOpenAIResponsesAsync(
-        List<OpenAI.Responses.ResponseItem> conversation,
+        List<OpenAI.Responses.ResponseItem> inputs,
+        string? conversationId,
         CancellationToken cancellationToken)
     {
         var activity = Activity.Current;
 
-        var aiProjectEndpoint = Environment.GetEnvironmentVariable("AZURE_AI_PROJECT_ENDPOINT");
-        var aoaiEndpoint = ToAzureOpenAIEndpoint(aiProjectEndpoint!);
         var deploymentName = Environment.GetEnvironmentVariable("AZURE_AI_MODEL_DEPLOYMENT_NAME")?? "gpt-4o-mini";
-        var apiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY");
-        var apiVersion = Environment.GetEnvironmentVariable("OPENAI_API_VERSION") ?? "2025-03-01-preview";
         var chatHistoryLength = GetIntEnv("AGENT_CHAT_HISTORY_LENGTH", 20);
 
         activity?.SetTag("gen_ai.request.model", deploymentName);
 
-        Azure.AI.OpenAI.AzureOpenAIClient apiClient;
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
-            var credential = new System.ClientModel.ApiKeyCredential(apiKey);
-            apiClient = new Azure.AI.OpenAI.AzureOpenAIClient(new Uri(aoaiEndpoint!), credential);
-        }
-        else
-        {
-            var credential = new DefaultAzureCredential();
-            apiClient = new Azure.AI.OpenAI.AzureOpenAIClient(new Uri(aoaiEndpoint!), credential);
-        }
+        var apiClient = GetOrCreateApiClient();
 
         var createResponseOptions = new OpenAI.Responses.CreateResponseOptions
         {
             StreamingEnabled = false
         };
 
-        foreach (var item in conversation.TakeLast(chatHistoryLength))
+        if (!string.IsNullOrWhiteSpace(conversationId))
+        {
+            createResponseOptions.ConversationOptions = new OpenAI.Responses.ResponseConversationOptions(conversationId);
+        }
+
+        foreach (var item in inputs.TakeLast(chatHistoryLength))
         {
             createResponseOptions.InputItems.Add(item);
         }

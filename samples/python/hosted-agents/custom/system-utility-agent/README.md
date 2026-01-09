@@ -121,6 +121,11 @@ To deploy your agent to Microsoft Foundry, follow the comprehensive deployment g
 
 ## Troubleshooting
 
+### After deployed, the agent appears stateless (chat history is not preserved)
+
+- Make sure you are using a model deployment hosted in foundry.
+- If you are not chat with your agent from UI, be sure to pass an existing foundry conversation ID in the `conversation` field of your create responses request.
+
 ### Images built on Apple Silicon or other ARM64 machines do not work on our service
 
 We **recommend using `azd` cloud build**, which always builds images with the correct architecture.
@@ -129,10 +134,10 @@ If you choose to **build locally**, and your machine is **not `linux/amd64`** (f
 
 **Fix for local builds**
 
-Add this line at the top of your `Dockerfile`:
+Use this command to build the image locally:
 
-```dockerfile
-FROM --platform=linux/amd64 python:3.12-slim
+```shell
+docker build --platform=linux/amd64 -t image .
 ```
 
 This forces the image to be built for the required `amd64` architecture.

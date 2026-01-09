@@ -20,7 +20,7 @@ import json
 
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, AsyncGenerator, Union
 from azure.ai.agentserver.core import AgentRunContext, FoundryCBAgent
 from azure.ai.agentserver.core.models import (
@@ -63,13 +63,13 @@ Important:
 
 @dataclass
 class AgentConfig:
-    model: str = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o-mini")
-    project_endpoint: str = os.getenv("AZURE_AI_PROJECT_ENDPOINT", "")
-    max_turns: int = int(os.getenv("AGENT_MAX_TURNS", "10"))
-    chat_history_length: int = int(os.getenv("AGENT_CHAT_HISTORY_LENGTH", "20"))
-    openai_api_version: str = os.getenv("OPENAI_API_VERSION", "2025-03-01-preview")
-    openai_api_key: str = os.getenv("AZURE_OPENAI_API_KEY", "")
-    azure_endpoint: str = os.getenv("AZURE_ENDPOINT", "")
+    model: str = field(default_factory=lambda: os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o-mini"))
+    project_endpoint: str = field(default_factory=lambda: os.getenv("AZURE_AI_PROJECT_ENDPOINT", ""))
+    max_turns: int = field(default_factory=lambda: int(os.getenv("AGENT_MAX_TURNS", "10")))
+    chat_history_length: int = field(default_factory=lambda: int(os.getenv("AGENT_CHAT_HISTORY_LENGTH", "20")))
+    openai_api_version: str = field(default_factory=lambda: os.getenv("OPENAI_API_VERSION", "2025-11-15-preview"))
+    openai_api_key: str = field(default_factory=lambda: os.getenv("AZURE_OPENAI_API_KEY", ""))
+    azure_endpoint: str = field(default_factory=lambda: os.getenv("AZURE_ENDPOINT", ""))
 
 
 class SystemUtilityAgent(FoundryCBAgent):
@@ -90,10 +90,7 @@ class SystemUtilityAgent(FoundryCBAgent):
                 credential=DefaultAzureCredential(),
             )
             self.client = self.project_client.get_openai_client()
-        # Conversation state for Responses API style
-        self.messages: List[Dict[str, Any]] = [
-            {"type": "message", "role": "system", "content": SYSTEM_PROMPT}
-        ]
+        
         self.hit_limit_warning = f"I hit the {self.cfg.max_turns} max turn limit for this turn. Try rephrasing."
 
     def init_tracing_internal(self, exporter_endpoint=None, app_insights_conn_str=None):
@@ -193,22 +190,43 @@ class SystemUtilityAgent(FoundryCBAgent):
         logger.info(f"Received user input: {request_input}")
         if isinstance(request_input, str):
             request_input = [{"type": "message", "role": "user", "content": request_input}]
-        self.messages += request_input
+        
+        input_messages: List[Dict[str, Any]] = [
+            {"type": "message", "role": "system", "content": SYSTEM_PROMPT}
+        ]
+        input_messages += request_input
         span.set_attribute("gen_ai.conversation.id", context.conversation_id)
+
+        current_conv = None
+        try:
+            current_conv = self.client.conversations.retrieve(conversation_id=context.conversation_id)
+        except Exception as e:
+            logger.warning(f"Failed to retrieve conversation {context.conversation_id}: {e}. Agent will work without prior history.")
         total_input_tokens = 0
         total_output_tokens = 0
         # Tool-calling loop: keep asking the model until it returns a final answer
         for n in range(self.cfg.max_turns):  # prevent runaway loops
             with self.tracer.start_as_current_span("SystemUtilityAgent.agent_run_iteration") as iter_span:
                 iter_span.set_attribute("gen_ai.request.model", self.cfg.model)
-                resp = self.client.responses.create(
-                    model=self.cfg.model,
-                    input=self.messages[-self.cfg.chat_history_length :],
-                    tools=TOOLS,
-                )
-                self.messages += resp.output
+                request_payload = {
+                    "model": self.cfg.model,
+                    "input": input_messages[-self.cfg.chat_history_length :],
+                    "tools": TOOLS,
+                }
+                if current_conv:
+                    request_payload["conversation"] = current_conv.id
+                
+                resp = self.client.responses.create(**request_payload)
+                
+                if current_conv:
+                    # reset this to avoid duplicate input items in conversation
+                    input_messages = []
+                else:
+                    # in local mode, keep accumulating input messages for current agent run
+                    input_messages += resp.output
+                    
                 iter_span.set_attribute("current_iteration", n)
-                iter_span.set_attribute("gen_ai.input.messages", json.dumps(self.messages, default=str)[:2048])
+                iter_span.set_attribute("gen_ai.input.messages", json.dumps(input_messages, default=str)[:2048])
                 usage = getattr(resp, "usage", None) or (resp.get("usage") if isinstance(resp, dict) else None)
                 if usage:
                     def uget(k):
@@ -254,7 +272,7 @@ class SystemUtilityAgent(FoundryCBAgent):
                                     tool_span.set_status(Status(StatusCode.ERROR, str(e)))
                                     tool_result = {"supported": False, "reason": f"Tool error: {type(e).__name__}: {e}", "data": None}
                             # Append tool result back to the conversation
-                            self.messages.append({
+                            input_messages.append({
                                 "type": "function_call_output",
                                 "call_id": call_id or name,
                                 "output": json.dumps(tool_result),

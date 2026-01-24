@@ -1,5 +1,5 @@
 name: FoundryToolsReactAgent
-description:
+description: This LangGraph agent uses Foundry tools to perform tasks such as interpreting python code.
 metadata:
   example:
     - role: user

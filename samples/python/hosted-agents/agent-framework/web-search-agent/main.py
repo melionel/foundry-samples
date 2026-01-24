@@ -44,4 +44,4 @@ def create_agent() -> ChatAgent:
     return agent
 
 if __name__ == "__main__":
-    from_agent_framework(agent=create_agent()).run()
+    from_agent_framework(create_agent()).run()

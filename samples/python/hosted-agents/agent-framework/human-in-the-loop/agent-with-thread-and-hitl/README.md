@@ -22,12 +22,36 @@ When the agent determines it needs to call an approval-required function, the re
 
 ### Thread persistence
 
-The sample uses `JsonLocalFileAgentThreadRepository` for `AgentThread` persistence, creating a JSON file per conversation ID under `./thread_storage`. An in-memory alternative, `InMemoryAgentThreadRepository`, lives in the `azure.ai.agentserver.agentframework.persistence` module.
+- The sample uses `JsonLocalFileAgentThreadRepository` for `AgentThread` persistence, creating a JSON file per conversation ID under `./thread_storage`. 
 
-To store thread messages elsewhere, inherit from `SerializedAgentThreadRepository` and override the following methods:
+- An in-memory alternative, `InMemoryAgentThreadRepository`, lives in the `azure.ai.agentserver.agentframework.persistence` module.
 
-- `read_from_storage(self, conversation_id: str) -> Optional[Any]`
-- `write_to_storage(self, conversation_id: str, serialized_thread: Any)`
+- To store thread messages elsewhere, inherit from `SerializedAgentThreadRepository` and override the following methods:
+```python
+class SerializedAgentThreadRepository(AgentThreadRepository):
+    async def read_from_storage(self, conversation_id: str) -> Optional[Any]:
+        """Read the serialized thread from storage.
+
+        :param conversation_id: The conversation ID.
+        :type conversation_id: str
+
+        :return: The serialized thread if available, None otherwise.
+        :rtype: Optional[Any]
+        """
+        ...
+
+    async def write_to_storage(self, conversation_id: str, serialized_thread: Any) -> None:
+        """Write the serialized thread to storage.
+
+        :param conversation_id: The conversation ID.
+        :type conversation_id: str
+        :param serialized_thread: The serialized thread to save.
+        :type serialized_thread: Any
+        :return: None
+        :rtype: None
+        """
+        ...
+```
 
 These hooks let you plug in any backing store (blob storage, databases, etc.) without changing the rest of the sample.
 

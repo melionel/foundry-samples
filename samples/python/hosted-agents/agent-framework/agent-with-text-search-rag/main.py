@@ -106,7 +106,7 @@ def create_agent():
 
 def main():
     # Run the agent as a hosted agent
-    from_agent_framework(lambda _: create_agent()).run()
+    from_agent_framework(create_agent()).run()
 
 
 if __name__ == "__main__":

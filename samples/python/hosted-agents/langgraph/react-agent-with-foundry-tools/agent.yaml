@@ -1,4 +1,4 @@
-name: CodeInterpreterReactAgent
+name: FoundryToolsReactAgent
 description:
 metadata:
   example:
@@ -12,7 +12,7 @@ metadata:
   authors:
     - junanchen
 template:
-  name: CodeInterpreterReactAgentLG
+  name: FoundryToolsReactAgentLG
   kind: hosted
   protocols:
     - protocol: responses

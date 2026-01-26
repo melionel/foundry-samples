@@ -57,6 +57,7 @@ jobs:
       AZURE_OPENAI_CHAT_DEPLOYMENT_NAME: ${{ vars.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME }}
       BING_GROUNDING_CONNECTION_ID: ${{ vars.BING_GROUNDING_CONNECTION_ID }}
       AZURE_AI_PROJECT_TOOL_CONNECTION_ID: ${{ vars.AZURE_AI_PROJECT_TOOL_CONNECTION_ID }}
+      OPENAI_API_VERSION: ${{ vars.OPENAI_API_VERSION }}
     strategy:
       fail-fast: false
       matrix:
@@ -168,11 +169,11 @@ jobs:
               
               if [ "$success" == "true" ]; then
                 echo "| $name | $framework | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
-                ((passed++))
+                passed=$((passed + 1))
               else
                 error=$(python -c "import json; r=json.load(open('$dir/result.json')); print(r.get('error', 'Unknown')[:50])")
                 echo "| $name | $framework | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
-                ((failed++))
+                failed=$((failed + 1))
               fi
             fi
           done

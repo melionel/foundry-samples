@@ -96,7 +96,7 @@ call_id = ""
 request_id = ""
 for item in response.output:
     if item.type == "function_call" and item.name == "__hosted_agent_adapter_hitl__":
-        agent_request = json.loads(item.get("arguments", "{}")).get("agent_request", {})
+        agent_request = json.loads(item.arguments).get("agent_request", {})
         request_id = agent_request.get("request_id", "")
         
         agent_messages = agent_request.get("agent_messages", [])

@@ -124,25 +124,55 @@ def wait_for_server(timeout: int = STARTUP_TIMEOUT) -> bool:
     return False
 
 
-def send_test_request(test_input: str) -> dict:
-    """Send a test request to the /responses endpoint."""
+def send_test_request(test_input: str, stream: bool = False) -> dict:
+    """Send a test request to the /responses endpoint.
+
+    Args:
+        test_input: The input text to send
+        stream: Whether to use streaming mode
+
+    Returns:
+        Dict with status_code, body/chunks, and success
+    """
     payload = {
         "input": test_input,
-        "stream": False
+        "stream": stream
     }
-    
+
     response = requests.post(
         f"{SERVER_URL}/responses",
         json=payload,
         headers={"Content-Type": "application/json"},
-        timeout=REQUEST_TIMEOUT
+        timeout=REQUEST_TIMEOUT,
+        stream=stream
     )
-    
-    return {
-        "status_code": response.status_code,
-        "body": response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text,
-        "success": response.status_code == 200
-    }
+
+    if stream:
+        # For streaming, collect all chunks
+        if response.status_code == 200:
+            chunks = []
+            for line in response.iter_lines():
+                if line:
+                    chunks.append(line.decode('utf-8') if isinstance(line, bytes) else line)
+            return {
+                "status_code": response.status_code,
+                "chunks": chunks,
+                "chunk_count": len(chunks),
+                "success": True
+            }
+        else:
+            return {
+                "status_code": response.status_code,
+                "body": response.text,
+                "success": False
+            }
+    else:
+        # Non-streaming response
+        return {
+            "status_code": response.status_code,
+            "body": response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text,
+            "success": response.status_code == 200
+        }
 
 
 def run_test(sample_path: Path) -> dict:
@@ -239,29 +269,60 @@ def run_test(sample_path: Path) -> dict:
             return result
         
         result["details"]["server_started"] = True
-        print("Server is ready. Sending test request...")
-        
-        # Send test request
+        print("Server is ready.")
+
+        # Test 1: Non-streaming request
+        print("\n--- Test 1: Non-streaming request ---")
         try:
-            response = send_test_request(test_input)
-            result["details"]["response_status"] = response["status_code"]
-            
+            response = send_test_request(test_input, stream=False)
+            result["details"]["non_streaming_status"] = response["status_code"]
+
             if response["success"]:
-                result["success"] = True
+                result["details"]["non_streaming"] = "passed"
                 # Extract output text if available
                 body = response["body"]
                 if isinstance(body, dict):
                     output_text = body.get("output_text", body.get("output", str(body)))
                     result["details"]["response_preview"] = str(output_text)[:200]
-                print(f"✅ Test passed! Status: {response['status_code']}")
+                print(f"✅ Non-streaming test passed! Status: {response['status_code']}")
             else:
-                result["error"] = f"Request failed with status {response['status_code']}: {response['body']}"
-                print(f"❌ Test failed! Status: {response['status_code']}")
-                
+                result["error"] = f"Non-streaming request failed with status {response['status_code']}: {response['body']}"
+                result["details"]["non_streaming"] = "failed"
+                print(f"❌ Non-streaming test failed! Status: {response['status_code']}")
+                return result
+
         except requests.exceptions.Timeout:
-            result["error"] = f"Request timed out after {REQUEST_TIMEOUT} seconds"
+            result["error"] = f"Non-streaming request timed out after {REQUEST_TIMEOUT} seconds"
+            result["details"]["non_streaming"] = "failed"
+            return result
         except requests.exceptions.RequestException as e:
-            result["error"] = f"Request failed: {str(e)}"
+            result["error"] = f"Non-streaming request failed: {str(e)}"
+            result["details"]["non_streaming"] = "failed"
+            return result
+
+        # Test 2: Streaming request
+        print("\n--- Test 2: Streaming request ---")
+        try:
+            stream_response = send_test_request(test_input, stream=True)
+            result["details"]["streaming_status"] = stream_response["status_code"]
+
+            if stream_response["success"]:
+                result["details"]["streaming"] = "passed"
+                result["details"]["streaming_chunks"] = stream_response.get("chunk_count", 0)
+                print(f"✅ Streaming test passed! Status: {stream_response['status_code']}, Chunks: {stream_response.get('chunk_count', 0)}")
+                # Both tests passed
+                result["success"] = True
+            else:
+                result["error"] = f"Streaming request failed with status {stream_response['status_code']}: {stream_response.get('body', 'Unknown error')}"
+                result["details"]["streaming"] = "failed"
+                print(f"❌ Streaming test failed! Status: {stream_response['status_code']}")
+
+        except requests.exceptions.Timeout:
+            result["error"] = f"Streaming request timed out after {REQUEST_TIMEOUT} seconds"
+            result["details"]["streaming"] = "failed"
+        except requests.exceptions.RequestException as e:
+            result["error"] = f"Streaming request failed: {str(e)}"
+            result["details"]["streaming"] = "failed"
             
     finally:
         # Clean up server process

@@ -24,8 +24,8 @@ template:
     - name: AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
       value: "{{chat}}"
     - name: AZURE_AI_PROJECT_TOOL_CONNECTION_ID
-      value: ""
+      value: <CONNECTION_ID_PLACEHOLDER>
 resources:
   - kind: model
-    id: gpt-4o-mini
+    id: gpt-5
     name: chat

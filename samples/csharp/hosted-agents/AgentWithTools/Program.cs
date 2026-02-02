@@ -3,6 +3,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Azure.AI.OpenAI;
 using Azure.Identity;
+using System;
 
 // Get configuration from environment variables
 var openAiEndpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT") ?? throw new InvalidOperationException("AZURE_OPENAI_ENDPOINT is not set.");
@@ -37,6 +38,8 @@ var agent = new ChatClientAgent(chatClient,
       .AsBuilder()
       .UseOpenTelemetry(sourceName: "Agents", configure: (cfg) => cfg.EnableSensitiveData = true)
       .Build();
+
+Console.WriteLine("Test Github Actions Runner");
 
 // Run agent with tool support using ToolDefinition objects
 await agent.RunAIAgentAsync(telemetrySourceName: "Agents");
